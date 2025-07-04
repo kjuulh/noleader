@@ -1,0 +1,18 @@
+[package]
+name = "noleader"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+
+async-nats = "0.42"
+uuid = { version = "1", features = ["v4"] }
+bytes = "1"
+tokio.workspace = true
+tokio-util = "0.7"
+rand = "0.9.1"
+
+[dev-dependencies]
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
