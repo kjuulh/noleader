@@ -23,28 +23,21 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("creating bucket");
     leader.create_bucket().await?;
 
-    tokio::spawn({
-        let leader = leader.clone();
-        let leader_id = leader_id.clone();
-
-        async move {
-            tracing::debug!(leader_id, "starting leader");
-            leader
-                .start(CancellationToken::default())
-                .await
-                .expect("to succeed");
-        }
-    });
-
     leader
-        .do_while_leader(move |token| async move {
-            loop {
-                if token.is_cancelled() {
-                    return Ok(());
-                }
+        .acquire_and_run({
+            move |token| {
+                let leader_id = leader_id.clone();
 
-                tracing::info!("do work as leader");
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                async move {
+                    loop {
+                        if token.is_cancelled() {
+                            return Ok(());
+                        }
+
+                        tracing::info!(leader_id, "do work as leader");
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    }
+                }
             }
         })
         .await?;
