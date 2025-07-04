@@ -1,7 +1,12 @@
 [package]
 name = "noleader"
-version = "0.1.0"
-edition = "2021"
+edition = "2024"
+readme = "../../README.md"
+version.workspace = true
+license.workspace = true
+repository = "https://git.front.kjuulh.io/kjuulh/noleader"
+authors = ["kjuulh <contact@kasperhermansen.com>"]
+description = "A small leader election package using NATS keyvalue store as the distributed locking mechanism. Does not require a min / max set of nodes"
 
 [dependencies]
 anyhow.workspace = true
