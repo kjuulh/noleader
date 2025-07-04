@@ -71,30 +71,27 @@ async fn main() -> anyhow::Result<()> {
     // Ensure the KV bucket exists
     leader.create_bucket().await?;
 
-    // Spawn the election loop
-    tokio::spawn({
-        let leader = leader.clone();
-        async move {
-            leader
-                .start(CancellationToken::default())
-                .await
-                .expect("leadership loop failed");
-        }
-    });
-
-    // Do work while we are the leader
+    // Attempts to acquire election loop, will call inner function if it wins, if it loses it will retry over again.
+    // Will block until either the inner function returns and error, or the election processes crashes, intended to allow the application to properly restart
     leader
-        .do_while_leader(|cancel_token| async move {
-            loop {
-                if cancel_token.is_cancelled() {
-                    break;
+        .acquire_and_run({
+            move |token| {
+                let leader_id = leader_id.clone();
+
+                async move {
+                    loop {
+                        if token.is_cancelled() {
+                            return Ok(());
+                        }
+
+                        tracing::info!(leader_id, "do work as leader");
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    }
                 }
-                tracing::info!("🔑 I am the leader—doing work");
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
-            Ok(())
         })
         .await?;
+
 
     Ok(())
 }
