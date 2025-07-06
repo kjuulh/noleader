@@ -22,9 +22,9 @@ This library is still young and the API is subject to change.
 
 ## Intended use-case
 
-Noleader is not built for distributed consensus, or fast re-election produces. It take upwards to a minute to get reelected, state is the users responsibility to handle.
+Noleader is not built for distributed consensus, or fast re-election procedures. It take upwards to a minute to get re-elected, state is the users responsibility to handle.
 
-Noleader is pretty much just a distributed lock, intended for use-cases where the use wants to only have a single node scheduling work etc.
+Noleader is pretty much just a distributed lock, intended for use-cases where the user wants to only have a single node scheduling work etc.
 
 Good alternatives are:
 
@@ -97,29 +97,14 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-## API Overview
+## Examples
 
-* **`Leader::new(bucket: &str, key: &str, client: async_nats::Client) -> Leader`**
-  Create a new election participant.
-* **`create_bucket(&self) -> anyhow::Result<()>`**
-  Ensures the KV bucket exists (no-op if already created).
-* **`start(&self, token: CancellationToken) -> anyhow::Result<()>`**
-  Begins the background leader-election loop; renews TTL on success or retries on failure.
-* **`do_while_leader<F, Fut>(&self, f: F) -> anyhow::Result<()>`**
-  Runs your closure as long as you hold leadership; cancels immediately on loss.
-* **`leader_id(&self) -> Uuid`**
-  Returns your unique candidate ID.
-* **`is_leader(&self) -> Status`**
-  Returns `Status::Leader` or `Status::Candidate`, taking shutdown into account.
+See the examples folder in ./crates/noleader/examples
 
-### Types
+## Architecture
 
-```rust
-pub enum Status {
-    Leader,
-    Candidate,
-}
-```
+Noleader uses a simple election stealing 
+
 
 ## License
 
