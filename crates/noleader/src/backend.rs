@@ -1,8 +1,9 @@
 use std::{ops::Deref, sync::Arc};
 
-use crate::backend::nats::NatsBackend;
+use crate::backend::{nats::NatsBackend, postgres::PostgresBackend};
 
 mod nats;
+mod postgres;
 
 pub struct Backend {
     inner: Arc<dyn BackendEdge + Send + Sync + 'static>,
@@ -20,6 +21,18 @@ impl Backend {
             inner: Arc::new(NatsBackend::new(client, bucket)),
         }
     }
+
+    pub fn postgres(database_url: &str) -> Self {
+        Self {
+            inner: Arc::new(PostgresBackend::new(database_url)),
+        }
+    }
+
+    pub fn postgres_with_pool(pool: sqlx::PgPool) -> Self {
+        Self {
+            inner: Arc::new(PostgresBackend::new_with_pool("bogus", pool)),
+        }
+    }
 }
 
 impl Deref for Backend {
@@ -35,6 +48,7 @@ pub trait BackendEdge {
     async fn setup(&self) -> anyhow::Result<()>;
     async fn get(&self, key: &Key) -> anyhow::Result<LeaderValue>;
     async fn update(&self, key: &Key, val: &LeaderId) -> anyhow::Result<()>;
+    async fn release(&self, key: &Key, val: &LeaderId) -> anyhow::Result<()>;
 }
 
 pub enum LeaderValue {

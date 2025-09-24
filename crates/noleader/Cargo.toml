@@ -19,6 +19,13 @@ tokio.workspace = true
 tokio-util = "0.7"
 rand = "0.9.1"
 async-trait = "0.1.89"
+# fork until dangerous set migrate table name is stable. Should be any version after 8.6
+sqlx = { git = "https://github.com/launchbadge/sqlx", features = [
+  "uuid",
+  "postgres",
+  "runtime-tokio",
+  "tls-rustls",
+], rev = "064d649abdfd1742e5fdcc20176a6b415b9c25d3" }
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

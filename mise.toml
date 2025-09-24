@@ -1,3 +1,7 @@
+[env]
+_.file = ".env"
+
+
 [tasks.test]
 alias = ["t"]
 run = "cargo nextest run"

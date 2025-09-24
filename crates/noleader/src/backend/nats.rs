@@ -122,4 +122,10 @@ impl BackendEdge for NatsBackend {
 
         Ok(())
     }
+
+    async fn release(&self, _key: &Key, _val: &LeaderId) -> anyhow::Result<()> {
+        // TODO: implement release for nats
+
+        Ok(())
+    }
 }

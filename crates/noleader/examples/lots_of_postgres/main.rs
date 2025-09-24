@@ -1,3 +1,5 @@
+use anyhow::Context;
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -12,17 +14,37 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let mybucket = "mytestbucket";
     let mykey = "myleaderkey";
-    let client = async_nats::connect("localhost:4222").await?;
 
     let mut handles = Vec::new();
 
+    let db_url = &std::env::var("DATABASE_URL").context("DATABASE_URL is missing")?;
+    let pool = sqlx::PgPool::connect_lazy(db_url)?;
+
+    let cancel = CancellationToken::new();
+    let mut cancelled_resp = Vec::new();
+
+    tokio::spawn({
+        let cancel = cancel.clone();
+
+        async move {
+            tokio::signal::ctrl_c().await.expect("to receive shutdown");
+
+            cancel.cancel();
+        }
+    });
+
     for _ in 0..100 {
-        let client = client.clone();
+        let pool = pool.clone();
+        let cancel = cancel.child_token();
+
+        let item_cancellation = CancellationToken::new();
+        cancelled_resp.push(item_cancellation.child_token());
 
         let handle = tokio::spawn(async move {
-            let leader = noleader::Leader::new_nats(mykey, mybucket, client);
+            let mut leader = noleader::Leader::new_postgres_pool(mykey, pool);
+
+            leader.with_cancellation(cancel);
             let leader_id = leader.leader_id().await.to_string();
 
             tokio::spawn({
@@ -31,7 +53,15 @@ async fn main() -> anyhow::Result<()> {
 
                 async move {
                     tracing::debug!(leader_id, "starting leader");
-                    leader.start().await.expect("to succeed");
+                    let res = leader.start().await;
+
+                    tracing::warn!("shutting down");
+
+                    item_cancellation.cancel();
+
+                    if let Err(e) = res {
+                        tracing::error!("lots failed: {e:?}");
+                    }
                 }
             });
 
@@ -54,8 +84,12 @@ async fn main() -> anyhow::Result<()> {
         handles.push(handle);
     }
 
+    for cancel in cancelled_resp {
+        cancel.cancelled().await;
+    }
+
     for handle in handles {
-        handle.await??;
+        handle.abort();
     }
 
     Ok(())

@@ -20,6 +20,8 @@ pub struct Leader {
     shutting_down: Arc<AtomicBool>,
     is_leader: Arc<AtomicBool>,
     inner: Arc<RwLock<InnerLeader>>,
+
+    cancellation: CancellationToken,
 }
 const DEFAULT_INTERVAL: Duration = std::time::Duration::from_secs(10);
 
@@ -31,6 +33,7 @@ impl Leader {
             shutting_down: Arc::new(AtomicBool::new(false)),
             is_leader: Arc::new(AtomicBool::new(false)),
             inner: Arc::new(RwLock::new(InnerLeader::new(backend, key))),
+            cancellation: CancellationToken::new(),
         }
     }
 
@@ -38,21 +41,48 @@ impl Leader {
         Self::new(key, Backend::nats(client, bucket))
     }
 
+    pub fn new_postgres(key: &str, database_url: &str) -> Self {
+        Self::new(key, Backend::postgres(database_url))
+    }
+
+    pub fn new_postgres_pool(key: &str, pool: sqlx::PgPool) -> Self {
+        Self::new(key, Backend::postgres_with_pool(pool))
+    }
+
+    pub fn with_cancellation(&mut self, cancellation: CancellationToken) -> &mut Self {
+        self.cancellation = cancellation;
+        self
+    }
+
+    pub fn with_cancel_task<T>(&mut self, f: T) -> &mut Self
+    where
+        T: Future<Output = ()> + Send + 'static,
+    {
+        let cancel = self.cancellation.clone();
+
+        tokio::spawn(async move {
+            f.await;
+
+            cancel.cancel();
+        });
+
+        self
+    }
+
     pub async fn acquire_and_run<F, Fut>(&self, f: F) -> anyhow::Result<()>
     where
         F: Fn(CancellationToken) -> Fut,
         Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
     {
-        let parent_token = CancellationToken::default();
+        let parent_token = self.cancellation.clone();
         let s = self.clone();
 
         let server_token = parent_token.child_token();
 
         // Start the server election process in another task, this is because start is blocking
         let handle = tokio::spawn({
-            let server_token = server_token.child_token();
             async move {
-                match s.start(server_token).await {
+                match s.start().await {
                     Ok(_) => {}
                     Err(e) => tracing::error!("leader election process failed: {}", e),
                 }
@@ -72,6 +102,11 @@ impl Leader {
         server_token.cancel();
         // Close down the task as well, it should already be stopped, but this forces the task to close
         handle.abort();
+
+        {
+            self.inner.write().await.cleanup().await?;
+        }
+
         res?;
 
         Ok(())
@@ -96,11 +131,21 @@ impl Leader {
         Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
     {
         loop {
+            if cancellation_token.is_cancelled() {
+                return Ok(());
+            }
+
             let cancellation_token = cancellation_token.child_token();
 
             let is_leader = self.is_leader.clone();
             if !is_leader.load(Ordering::Relaxed) {
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                    _ = cancellation_token.cancelled() => {
+                        return Ok(());
+                    }
+                }
+
                 continue;
             }
 
@@ -111,7 +156,7 @@ impl Leader {
                     tokio::select! {
                         _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {}
                         _ = cancellation_token.cancelled() => {
-                            break;
+                            return;
                         }
 
                     }
@@ -123,6 +168,7 @@ impl Leader {
             });
 
             let res = f(child_token).await;
+
             guard.abort();
             res?;
         }
@@ -133,7 +179,7 @@ impl Leader {
         inner.leader_id.clone().into()
     }
 
-    pub async fn start(&self, cancellation_token: CancellationToken) -> anyhow::Result<()> {
+    pub async fn start(&self) -> anyhow::Result<()> {
         let mut attempts = 1;
 
         {
@@ -153,7 +199,7 @@ impl Leader {
 
             tokio::select! {
                 _ = sleep_fut => {},
-                _ = cancellation_token.cancelled() => {
+                _ = self.cancellation.cancelled() => {
                     self.shutting_down.store(true, std::sync::atomic::Ordering::Relaxed); // Ordering can be relaxed, because our operation is an atomic update
                     return Ok(())
                 }
@@ -214,7 +260,6 @@ struct InnerLeader {
 
     key: Key,
     leader_id: LeaderId,
-    revision: u64,
 }
 
 #[derive(Default, Clone)]
@@ -230,7 +275,6 @@ impl InnerLeader {
         Self {
             backend,
             leader_id: LeaderId::new(),
-            revision: u64::MIN,
 
             key: key.into(),
 
@@ -271,6 +315,15 @@ impl InnerLeader {
                 return Ok(());
             }
         }
+
+        Ok(())
+    }
+
+    pub async fn cleanup(&self) -> anyhow::Result<()> {
+        self.backend
+            .release(&self.key, &self.leader_id)
+            .await
+            .context("cleanup")?;
 
         Ok(())
     }
