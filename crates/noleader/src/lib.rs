@@ -1,18 +1,19 @@
 use std::{
     future::Future,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
 
 use anyhow::Context;
-use async_nats::jetstream::kv;
 use rand::Rng;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+
+use crate::backend::{Backend, Key, LeaderId};
 
 #[derive(Clone)]
 pub struct Leader {
@@ -22,13 +23,19 @@ pub struct Leader {
 }
 const DEFAULT_INTERVAL: Duration = std::time::Duration::from_secs(10);
 
+mod backend;
+
 impl Leader {
-    pub fn new(bucket: &str, key: &str, client: async_nats::Client) -> Self {
+    pub fn new(key: &str, backend: Backend) -> Self {
         Self {
             shutting_down: Arc::new(AtomicBool::new(false)),
             is_leader: Arc::new(AtomicBool::new(false)),
-            inner: Arc::new(RwLock::new(InnerLeader::new(bucket, key, client))),
+            inner: Arc::new(RwLock::new(InnerLeader::new(backend, key))),
         }
+    }
+
+    pub fn new_nats(key: &str, bucket: &str, client: async_nats::Client) -> Self {
+        Self::new(key, Backend::nats(client, bucket))
     }
 
     pub async fn acquire_and_run<F, Fut>(&self, f: F) -> anyhow::Result<()>
@@ -101,7 +108,13 @@ impl Leader {
 
             let guard = tokio::spawn(async move {
                 loop {
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {}
+                        _ = cancellation_token.cancelled() => {
+                            break;
+                        }
+
+                    }
 
                     if !is_leader.load(Ordering::Relaxed) {
                         cancellation_token.cancel();
@@ -117,20 +130,15 @@ impl Leader {
 
     pub async fn leader_id(&self) -> Uuid {
         let inner = self.inner.read().await;
-        inner.id
-    }
-
-    pub async fn create_bucket(&self) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-        tracing::info!("creating bucket leadership bucket");
-
-        inner.create_bucket().await?;
-
-        Ok(())
+        inner.leader_id.clone().into()
     }
 
     pub async fn start(&self, cancellation_token: CancellationToken) -> anyhow::Result<()> {
         let mut attempts = 1;
+
+        {
+            self.inner.write().await.backend.setup().await?;
+        }
 
         // Initial attempt
         let _ = self.try_become_leader().await;
@@ -138,7 +146,7 @@ impl Leader {
         loop {
             let wait_factor = {
                 let mut rng = rand::rng();
-                rng.random_range(0.001..1.000)
+                rng.random_range(0.50..1.00)
             };
 
             let sleep_fut = tokio::time::sleep((DEFAULT_INTERVAL * attempts).mul_f64(wait_factor));
@@ -153,8 +161,7 @@ impl Leader {
 
             match self.try_become_leader().await {
                 Ok(_) => {
-                    self.is_leader
-                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                    self.is_leader.store(true, Ordering::Relaxed);
                     attempts = 1;
                 }
                 Err(e) => {
@@ -203,13 +210,11 @@ pub enum Status {
 struct InnerLeader {
     state: LeaderState,
 
-    bucket: String,
-    key: String,
+    backend: Backend,
 
-    id: uuid::Uuid,
+    key: Key,
+    leader_id: LeaderId,
     revision: u64,
-
-    client: async_nats::jetstream::Context,
 }
 
 #[derive(Default, Clone)]
@@ -221,47 +226,16 @@ enum LeaderState {
 }
 
 impl InnerLeader {
-    pub fn new(bucket: &str, key: &str, client: async_nats::Client) -> Self {
+    pub fn new(backend: Backend, key: impl Into<Key>) -> Self {
         Self {
-            bucket: bucket.into(),
-            key: key.into(),
-
-            id: uuid::Uuid::new_v4(),
+            backend,
+            leader_id: LeaderId::new(),
             revision: u64::MIN,
 
+            key: key.into(),
+
             state: LeaderState::Unknown,
-            client: async_nats::jetstream::new(client),
         }
-    }
-
-    pub async fn create_bucket(&mut self) -> anyhow::Result<()> {
-        if (self.client.get_key_value(&self.bucket).await).is_ok() {
-            return Ok(());
-        }
-
-        if let Err(e) = self
-            .client
-            .create_key_value(kv::Config {
-                bucket: self.bucket.clone(),
-                description: "leadership bucket for noleader".into(),
-                limit_markers: Some(std::time::Duration::from_secs(60)),
-                max_age: std::time::Duration::from_secs(60),
-                ..Default::default()
-            })
-            .await
-        {
-            tracing::info!(
-                "bucket creation failed, it might have just been a conflict, testing again: {e}"
-            );
-
-            if (self.client.get_key_value(&self.bucket).await).is_ok() {
-                return Ok(());
-            }
-
-            anyhow::bail!("failed to create bucket: {}", e)
-        }
-
-        Ok(())
     }
 
     /// start, will run a blocking operation for becoming the next leader.
@@ -302,60 +276,32 @@ impl InnerLeader {
     }
 
     async fn update_leadership(&mut self) -> anyhow::Result<()> {
-        let bucket = self.client.get_key_value(&self.bucket).await?;
+        let val = self
+            .backend
+            .get(&self.key)
+            .await
+            .context("could not find key, we've lost leadership status")?;
 
-        let Some(val) = bucket.get(&self.key).await? else {
-            anyhow::bail!("key doesn't exists, we've lost leadership status")
-        };
-
-        let Ok(id) = uuid::Uuid::from_slice(&val) else {
-            anyhow::bail!("value has changed, it is no longer a uuid, dropping leadership status");
-        };
-
-        if id != self.id {
-            anyhow::bail!("leadership has changed")
+        match val {
+            backend::LeaderValue::Unknown => anyhow::bail!("leadership is unknown"),
+            backend::LeaderValue::Found { id } if id != self.leader_id => {
+                anyhow::bail!("leadership has changed")
+            }
+            backend::LeaderValue::Found { .. } => self
+                .backend
+                .update(&self.key, &self.leader_id)
+                .await
+                .context("update leadership lock")?,
         }
-
-        let rev = bucket
-            .update(
-                &self.key,
-                bytes::Bytes::copy_from_slice(self.id.as_bytes()),
-                self.revision,
-            )
-            .await?;
-
-        self.revision = rev;
 
         Ok(())
     }
 
     async fn try_for_leadership(&mut self) -> anyhow::Result<()> {
-        let bucket = self
-            .client
-            .get_key_value(&self.bucket)
+        self.backend
+            .update(&self.key, &self.leader_id)
             .await
-            .context("failed to get bucket")?;
-
-        let rev = match bucket
-            .create_with_ttl(
-                &self.key,
-                bytes::Bytes::copy_from_slice(self.id.as_bytes()),
-                std::time::Duration::from_secs(60),
-            )
-            .await
-        {
-            Ok(rev) => rev,
-            Err(e) => match e.kind() {
-                kv::CreateErrorKind::AlreadyExists => {
-                    anyhow::bail!("another candidate has leadership status")
-                }
-                _ => {
-                    anyhow::bail!("{}", e);
-                }
-            },
-        };
-
-        self.revision = rev;
+            .context("try for leadership")?;
 
         tokio::time::sleep(DEFAULT_INTERVAL).await;
 
@@ -363,7 +309,7 @@ impl InnerLeader {
 
         let leadership_state = self.leadership_status().await?;
 
-        if !leadership_state.is_leader(&self.id) {
+        if !leadership_state.is_leader(&self.leader_id) {
             anyhow::bail!("failed to become leader, there is likely some churn going on");
         }
 
@@ -374,25 +320,16 @@ impl InnerLeader {
     }
 
     async fn leadership_status(&mut self) -> anyhow::Result<LeadershipState> {
-        let bucket = self.client.get_key_value(&self.bucket).await?;
-
-        let val = bucket.get(&self.key).await?;
+        let val = self
+            .backend
+            .get(&self.key)
+            .await
+            .inspect_err(|e| tracing::warn!("failed to query for leadership: {}", e))
+            .ok();
 
         Ok(match val {
-            Some(content) => {
-                let id = match uuid::Uuid::from_slice(&content) {
-                    Ok(u) => u,
-                    Err(e) => {
-                        tracing::warn!(
-                            "leadership state is not a valid UUID, ignoring the value: {}",
-                            e
-                        );
-                        return Ok(LeadershipState::NotFound);
-                    }
-                };
-
-                LeadershipState::Allocated { id }
-            }
+            Some(backend::LeaderValue::Found { id }) => LeadershipState::Allocated { id },
+            Some(backend::LeaderValue::Unknown) => LeadershipState::NotFound,
             None => LeadershipState::NotFound,
         })
     }
@@ -400,11 +337,11 @@ impl InnerLeader {
 
 enum LeadershipState {
     NotFound,
-    Allocated { id: uuid::Uuid },
+    Allocated { id: LeaderId },
 }
 
 impl LeadershipState {
-    pub fn is_leader(&self, leader_id: &Uuid) -> bool {
+    pub fn is_leader(&self, leader_id: &LeaderId) -> bool {
         match self {
             LeadershipState::Allocated { id } => id == leader_id,
             _ => false,

@@ -23,11 +23,8 @@ async fn main() -> anyhow::Result<()> {
         let client = client.clone();
 
         let handle = tokio::spawn(async move {
-            let leader = noleader::Leader::new(mybucket, mykey, client);
+            let leader = noleader::Leader::new_nats(mykey, mybucket, client);
             let leader_id = leader.leader_id().await.to_string();
-
-            tracing::info!("creating bucket");
-            leader.create_bucket().await?;
 
             tokio::spawn({
                 let leader = leader.clone();

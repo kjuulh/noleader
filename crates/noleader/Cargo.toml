@@ -13,11 +13,12 @@ anyhow.workspace = true
 tracing.workspace = true
 
 async-nats = "0.42"
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "v7"] }
 bytes = "1"
 tokio.workspace = true
 tokio-util = "0.7"
 rand = "0.9.1"
+async-trait = "0.1.89"
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

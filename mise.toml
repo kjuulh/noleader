@@ -1,0 +1,7 @@
+[tasks.test]
+alias = ["t"]
+run = "cargo nextest run"
+
+[tasks.example]
+alias = ["e"]
+run = "cargo run --example"

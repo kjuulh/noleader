@@ -1,4 +1,3 @@
-use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -14,14 +13,11 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let mybucket = "mytestbucket";
-    let mykey = "myleaderkey";
+    let mykey = "basic";
     let client = async_nats::connect("localhost:4222").await?;
 
-    let leader = noleader::Leader::new(mybucket, mykey, client);
+    let leader = noleader::Leader::new_nats(mykey, mybucket, client);
     let leader_id = leader.leader_id().await.to_string();
-
-    tracing::info!("creating bucket");
-    leader.create_bucket().await?;
 
     leader
         .acquire_and_run({
