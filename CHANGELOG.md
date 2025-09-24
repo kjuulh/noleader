@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2025-09-24
+
+### Added
+- add features for nats and postgres
+- add postgres
+- extract backend
+- do publish
+- allow readme
+
 ## [0.1.2] - 2025-07-04
 
 ### Added
