@@ -6,26 +6,34 @@ version.workspace = true
 license.workspace = true
 repository = "https://git.front.kjuulh.io/kjuulh/noleader"
 authors = ["kjuulh <contact@kasperhermansen.com>"]
-description = "A small leader election package using NATS keyvalue store as the distributed locking mechanism. Does not require a min / max set of nodes"
+description = "A small leader election package using NATS/Postgres keyvalue store as the distributed locking mechanism. Does not require a min / max set of nodes"
 
 [dependencies]
 anyhow.workspace = true
 tracing.workspace = true
+tokio.workspace = true
 
-async-nats = "0.42"
 uuid = { version = "1", features = ["v4", "v7"] }
 bytes = "1"
-tokio.workspace = true
 tokio-util = "0.7"
-rand = "0.9.1"
-async-trait = "0.1.89"
+rand = "0.9"
+async-trait = "0.1"
+
+async-nats = { version = "0.42", optional = true }
+
 # fork until dangerous set migrate table name is stable. Should be any version after 8.6
 sqlx = { git = "https://github.com/launchbadge/sqlx", features = [
   "uuid",
   "postgres",
   "runtime-tokio",
   "tls-rustls",
-], rev = "064d649abdfd1742e5fdcc20176a6b415b9c25d3" }
+], rev = "064d649abdfd1742e5fdcc20176a6b415b9c25d3", optional = true }
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+
+[features]
+default = ["nats", "postgres"]
+nats = ["dep:async-nats"]
+postgres = ["dep:sqlx"]

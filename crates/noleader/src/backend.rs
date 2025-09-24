@@ -1,8 +1,9 @@
 use std::{ops::Deref, sync::Arc};
 
-use crate::backend::{nats::NatsBackend, postgres::PostgresBackend};
 
+    #[cfg(feature = "nats")]
 mod nats;
+    #[cfg(feature = "postgres")]
 mod postgres;
 
 pub struct Backend {
@@ -16,21 +17,24 @@ impl Backend {
         }
     }
 
+    #[cfg(feature = "nats")]
     pub fn nats(client: async_nats::Client, bucket: &str) -> Self {
         Self {
-            inner: Arc::new(NatsBackend::new(client, bucket)),
+            inner: Arc::new(nats::NatsBackend::new(client, bucket)),
         }
     }
 
+    #[cfg(feature = "postgres")]
     pub fn postgres(database_url: &str) -> Self {
         Self {
-            inner: Arc::new(PostgresBackend::new(database_url)),
+            inner: Arc::new(postgres::PostgresBackend::new(database_url)),
         }
     }
 
+    #[cfg(feature = "postgres")]
     pub fn postgres_with_pool(pool: sqlx::PgPool) -> Self {
         Self {
-            inner: Arc::new(PostgresBackend::new_with_pool("bogus", pool)),
+            inner: Arc::new(postgres::PostgresBackend::new_with_pool("bogus", pool)),
         }
     }
 }

@@ -9,3 +9,12 @@ run = "cargo nextest run"
 [tasks.example]
 alias = ["e"]
 run = "cargo run --example"
+
+[tasks."local:up"]
+run = "docker compose -f ./templates/docker/docker-compose.yml up -d"
+
+[tasks."local:down"]
+run = "docker compose -f ./templates/docker/docker-compose.yml down -v"
+
+[tasks."db:prepare"]
+run = "cargo sqlx prepare --workspace"

@@ -81,16 +81,17 @@ impl BackendEdge for PostgresBackend {
     }
 
     async fn get(&self, key: &Key) -> anyhow::Result<LeaderValue> {
-        let rec = sqlx::query!(
+        let rec: Option<GetResult> = sqlx::query_as(
             "
             SELECT value, revision
             FROM noleader_leaders
             WHERE
                   key = $1
               AND heartbeat >= now() - interval '60 seconds'
+            LIMIT 1;
             ",
-            key.0
         )
+        .bind(&key.0)
         .fetch_optional(&self.db().await?)
         .await
         .context("get noleader key")?;
@@ -114,7 +115,7 @@ impl BackendEdge for PostgresBackend {
         let current_rev = self.revision.load(Ordering::Relaxed);
         let new_rev = current_rev + 1;
 
-        let res = sqlx::query!(
+        let res: Result<Option<UpdateResult>, sqlx::Error> = sqlx::query_as(
             r#"
             INSERT INTO noleader_leaders (key, value, revision, heartbeat)
             VALUES ($1, $2, $3, now())
@@ -133,11 +134,11 @@ impl BackendEdge for PostgresBackend {
                 )
             RETURNING value, revision
             "#,
-            key.0,
-            val.0.to_string(),
-            new_rev as i64,     // new revision
-            current_rev as i64, // expected current revision
         )
+        .bind(&key.0)
+        .bind(val.0.to_string())
+        .bind(new_rev as i64) // new revision
+        .bind(current_rev as i64) // expected current revision
         .fetch_optional(&self.db().await?)
         .await;
 
@@ -190,7 +191,7 @@ impl BackendEdge for PostgresBackend {
 
     async fn release(&self, key: &Key, val: &LeaderId) -> anyhow::Result<()> {
         let rev = self.revision.load(Ordering::Relaxed);
-        sqlx::query!(
+        sqlx::query(
             "
                 DELETE FROM noleader_leaders
                 WHERE
@@ -198,14 +199,26 @@ impl BackendEdge for PostgresBackend {
                     AND value = $2
                     AND revision = $3
             ",
-            key.0,
-            val.0.to_string(),
-            rev as i64, // new revision
         )
+        .bind(&key.0)
+        .bind(val.0.to_string())
+        .bind(rev as i64) // new revision
         .execute(&self.db().await?)
         .await
         .context("failed to release lock, it will expire naturally")?;
 
         Ok(())
     }
+}
+
+#[derive(sqlx::FromRow)]
+struct GetResult {
+    value: String,
+    revision: i64,
+}
+
+#[derive(sqlx::FromRow)]
+struct UpdateResult {
+    value: String,
+    revision: i64,
 }

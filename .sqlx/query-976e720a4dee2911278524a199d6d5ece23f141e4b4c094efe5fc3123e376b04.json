@@ -1,0 +1,43 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO noleader_leaders (key, value, revision, heartbeat)\n            VALUES ($1, $2, $3, now())\n            ON CONFLICT (key)\n            DO UPDATE SET\n                value = EXCLUDED.value,\n                revision = EXCLUDED.revision,\n                heartbeat = now()\n            WHERE \n                (\n                    -- Normal case: revision matches (we're the current leader updating)\n                    noleader_leaders.revision = $4\n                    OR\n                    -- Override case: heartbeat is old (stale leader)\n                    noleader_leaders.heartbeat < now() - INTERVAL '60 seconds'\n                )\n            RETURNING value, revision\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "value",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "noleader_leaders",
+            "name": "value"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "revision",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "noleader_leaders",
+            "name": "revision"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "976e720a4dee2911278524a199d6d5ece23f141e4b4c094efe5fc3123e376b04"
+}

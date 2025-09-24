@@ -37,14 +37,17 @@ impl Leader {
         }
     }
 
+    #[cfg(feature = "nats")]
     pub fn new_nats(key: &str, bucket: &str, client: async_nats::Client) -> Self {
         Self::new(key, Backend::nats(client, bucket))
     }
 
+    #[cfg(feature = "postgres")]
     pub fn new_postgres(key: &str, database_url: &str) -> Self {
         Self::new(key, Backend::postgres(database_url))
     }
 
+    #[cfg(feature = "postgres")]
     pub fn new_postgres_pool(key: &str, pool: sqlx::PgPool) -> Self {
         Self::new(key, Backend::postgres_with_pool(pool))
     }
