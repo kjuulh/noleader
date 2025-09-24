@@ -133,6 +133,8 @@ impl Leader {
         F: Fn(CancellationToken) -> Fut,
         Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
     {
+        let cancellation_token = cancellation_token.child_token();
+
         loop {
             if cancellation_token.is_cancelled() {
                 return Ok(());
@@ -170,6 +172,7 @@ impl Leader {
                 }
             });
 
+            tracing::info!("starting leader actions");
             let res = f(child_token).await;
 
             guard.abort();
