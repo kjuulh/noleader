@@ -144,18 +144,22 @@ impl BackendEdge for PostgresBackend {
 
         let res = match res {
             Ok(res) => res,
-            Err(e) => match &e {
-                sqlx::Error::Database(database_error) => {
-                    if database_error.is_unique_violation() {
-                        anyhow::bail!("update conflict: another leader holds lock")
-                    } else {
+            Err(e) => {
+                self.revision.store(0, Ordering::Relaxed);
+
+                match &e {
+                    sqlx::Error::Database(database_error) => {
+                        if database_error.is_unique_violation() {
+                            anyhow::bail!("update conflict: another leader holds lock")
+                        } else {
+                            anyhow::bail!(e);
+                        }
+                    }
+                    _ => {
                         anyhow::bail!(e);
                     }
                 }
-                _ => {
-                    anyhow::bail!(e);
-                }
-            },
+            }
         };
 
         match res {
@@ -170,6 +174,8 @@ impl BackendEdge for PostgresBackend {
                     // Only update our local revision if the update succeeded with our expected value
                     self.revision.store(rec.revision as u64, Ordering::Relaxed);
                 } else {
+                    self.revision.store(0, Ordering::Relaxed);
+
                     anyhow::bail!(
                         "update conflict: expected value={}, revision={}, got value={}, revision={}",
                         val.0.to_string(),
@@ -206,6 +212,8 @@ impl BackendEdge for PostgresBackend {
         .execute(&self.db().await?)
         .await
         .context("failed to release lock, it will expire naturally")?;
+
+        self.revision.store(0, Ordering::Relaxed);
 
         Ok(())
     }
