@@ -87,16 +87,20 @@ impl BackendEdge for PostgresBackend {
             FROM noleader_leaders
             WHERE
                   key = $1
+              AND revision = $2
               AND heartbeat >= now() - interval '60 seconds'
             LIMIT 1;
             ",
         )
         .bind(&key.0)
+        .bind(self.revision.load(Ordering::Relaxed) as i64)
         .fetch_optional(&self.db().await?)
         .await
         .context("get noleader key")?;
 
         let Some(val) = rec else {
+            self.revision.store(0, Ordering::Relaxed);
+
             anyhow::bail!("key doesn't exist, we've lost leadership status")
         };
 
@@ -105,6 +109,7 @@ impl BackendEdge for PostgresBackend {
 
         let Ok(id) = uuid::Uuid::parse_str(&val.value) else {
             tracing::warn!("value is not a valid uuid: {}", val.value);
+            self.revision.store(0, Ordering::Relaxed);
             return Ok(LeaderValue::Unknown);
         };
 
