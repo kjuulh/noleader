@@ -16,7 +16,7 @@ tokio.workspace = true
 uuid = { version = "1", features = ["v4", "v7"] }
 bytes = "1"
 tokio-util = "0.7"
-rand = "0.9"
+rand = "0.10"
 async-trait = "0.1"
 
 async-nats = { version = "0.46", optional = true }
