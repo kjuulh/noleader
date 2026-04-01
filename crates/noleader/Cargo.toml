@@ -19,7 +19,7 @@ tokio-util = "0.7"
 rand = "0.10"
 async-trait = "0.1"
 
-async-nats = { version = "0.46", optional = true }
+async-nats = { version = "0.47", optional = true }
 
 # fork until dangerous set migrate table name is stable. Should be any version after 8.6
 sqlx = { git = "https://github.com/launchbadge/sqlx", features = [
